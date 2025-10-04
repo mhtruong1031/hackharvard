@@ -1,14 +1,9 @@
 import cv2
 import torch
-
 import numpy as np
-import matplotlib.pyplot as plt
-
+import time
 from google import genai
 from google.genai import types
-
-from vedo import Points, show
-
 from config import GEMINI_KEY
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -17,28 +12,33 @@ class YeongSil:
     def __init__(self):
         self.gemini = genai.Client(api_key=GEMINI_KEY)
 
+        # Use faster MiDaS model for better performance
         midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
-        self.transform = midas_transforms.dpt_transform
-        self.midas = torch.hub.load("intel-isl/MiDaS", 'DPT_Hybrid')
+        self.transform = midas_transforms.small_transform  # Faster transform
+        self.midas = torch.hub.load("intel-isl/MiDaS", 'MiDaS_small')  # Faster model
         self.midas.to(device)
         self.midas.eval()
 
     # Takes some image and returns a description of the image from gemini and angle buckets of average depth
     def __process_image(self, image_path: str) -> tuple[str, list[float]]:
+        start_time = time.time()
+        print(f"[{0:.1f}s] Starting YeongSil image processing...")
+        
+        # Load and prepare image
+        step_start = time.time()
         with open(image_path, 'rb') as f:
             image_bytes = f.read()
-
-        # img = cv2.imread(image_path)[:, :, ::-1]
-        # img = cv2.resize(img, (384, 384)) 
-        # img = torch.from_numpy(img).permute(2,0,1).float() / 255.0 # tensor type shit
-
-        # # Apply the transform properly - the transform expects a PIL image or numpy array
-        # img_np = img.permute(1, 2, 0).numpy()  # Convert back to HWC format for transform
+        print(f"[{time.time() - start_time:.1f}s] Image loaded from disk")
 
         img = cv2.imread(image_path)
+        # Resize image for faster processing (optional: adjust size as needed)
+        img = cv2.resize(img, (256, 256))  # Smaller size for faster processing
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         input_batch = self.transform(img).to(device)
+        print(f"[{time.time() - start_time:.1f}s] Image preprocessed and transformed")
         
+        # Depth estimation
+        step_start = time.time()
         with torch.no_grad():
             prediction = self.midas(input_batch)
 
@@ -48,21 +48,30 @@ class YeongSil:
                 mode="bicubic",
                 align_corners=False,
             ).squeeze()
+        print(f"[{time.time() - start_time:.1f}s] Depth estimation completed")
 
         output = prediction.cpu().numpy()
+        print(f"[{time.time() - start_time:.1f}s] Depth data moved to CPU")
 
         h, w = output.shape
 
-        x = np.flip(np.tile(np.arange(w), h))/40
-        x = x - x.mean()
-        y = -np.flip(output.flatten())/40 + 38
-        #y = np.flip(output.flatten())
-        z = np.repeat(np.arange(h), w)/40
+        # Vectorized coordinate generation (much faster)
+        step_start = time.time()
+        x_coords = np.flip(np.tile(np.arange(w), h)) / 40
+        x_coords = x_coords - x_coords.mean()
+        y_coords = -np.flip(output.flatten()) / 80 + 35
+        z_coords = np.repeat(np.arange(h), w) / 40
 
-        xyz = np.stack((x, y, z), axis=1)
+        xyz = np.column_stack((x_coords, y_coords, z_coords))
+        print(f"[{time.time() - start_time:.1f}s] 3D coordinates generated")
 
-        y = xyz[:, 1]
+        # Commented out 3D visualization to prevent GUI crashes in background processing
+        # pts = Points(xyz, r=4)  # r is point radius
+        # pts.cmap("viridis", xyz[:, 1])  # color by y-values (you can change this)
+        # show(pts, axes=1, bg='white', title='3D Point Cloud')
 
+        # Gemini image description
+        step_start = time.time()
         desc = self.gemini.models.generate_content(
             model='gemini-2.5-flash',
             contents=[
@@ -70,41 +79,53 @@ class YeongSil:
                     data      = image_bytes,
                     mime_type = 'image/jpeg',
                 ),
-                'Describe what is in the image, including positions of objects, referring to it as "your view"'
+                'Describe what is in the image, including positions of large/major objects (far left, left, middle, right, far right), referring to it as "your view" in 5 sentences.'
             ]
         )
+        print(f"[{time.time() - start_time:.1f}s] Gemini image description completed")
 
-        # Calculate angle buckets of average depth
-        # Right now, there is a 3d projection of an environment represented by the variable xyz (collection of points)located quadrants 1 and 2 of the x-y plane. y axis is depth. x and z are side to side and up and down of the original image. find the angle of each point from the x=0 plane and have "buckets" of 10 degrees each. ex. buckets shoudl be 
-        # [-90 to -80, -80 to -70, -70 to -60, -60 to -50, -50 to -40, -40 to -30, -30 to -20, -20 to -10, -10 to 0, 0 to 10, 10 to 20, 20 to 30, 30 to 40, 40 to 50, 50 to 60, 60 to 70, 70 to 80, 80 to 90]
-        
-        x_coords = xyz[:, 0]  # x coordinates
-        y_coords = xyz[:, 1]  # y coordinates (depth)
-        
+        # Vectorized angle bucket calculation (much faster)
+        step_start = time.time()
         angles = np.degrees(np.arctan2(x_coords, y_coords))
         
-        bucket_edges = np.arange(-90, 91, 10)  # [-90, -80, -70, ..., 80, 90]
-        depth_buckets = []
+        # Use digitize for faster bucketing
+        bucket_edges = np.arange(-90, 91, 10)
+        bucket_indices = np.digitize(angles, bucket_edges) - 1
         
+        # Ensure indices are within valid range
+        bucket_indices = np.clip(bucket_indices, 0, len(bucket_edges) - 2)
+        
+        # Vectorized average calculation for each bucket
+        depth_buckets = []
         for i in range(len(bucket_edges) - 1):
-            lower_bound = bucket_edges[i]
-            upper_bound = bucket_edges[i + 1]
-            
-            # Find points in this angle range
-            mask = (angles >= lower_bound) & (angles < upper_bound)
-            
+            mask = bucket_indices == i
             if np.any(mask):
-                # Calculate average depth for points in this bucket
-                avg_depth = np.mean(y_coords[mask])
+                depth_buckets.append(np.mean(y_coords[mask]))
             else:
-                # No points in this bucket
-                avg_depth = 0.0
-                
-            depth_buckets.append(avg_depth)
+                depth_buckets.append(0.0)
+        print(f"[{time.time() - start_time:.1f}s] Depth buckets calculated")
 
-        return desc.text, depth_buckets # Type shit
+        print(f"[{time.time() - start_time:.1f}s] YeongSil processing completed successfully")
+        return desc.text, depth_buckets
 
     
     def get_guidance(self, image_path: str):
-        return self.__process_image(image_path)
+        start_time = time.time()
+        print(f"[{0:.1f}s] Starting YeongSil guidance generation...")
+        
+        desc, depth_buckets = self.__process_image(image_path)
+        print(f"[{time.time() - start_time:.1f}s] Image processing completed, generating guidance...")
 
+        depth_desc = '\n'.join([f'{dist} degrees is {depth_buckets[i]:.2f} units away.' for i, dist in enumerate(range(-85, 85, 10))])
+
+        guidance = self.gemini.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[
+                f'Please advise the blind user on how to traverse the following environment: {desc}.',
+                f'The depth values are from 0-180 degrees, and how many units forward there are of traversable distances, where 90 degrees is directly forward, but please refer to them as 0-90 degrees right or left of forward: {depth_desc}.',
+                'Please advise in 1-2 sentences with environmental context, with instructions first.'
+            ]
+        )
+        print(f"[{time.time() - start_time:.1f}s] Navigation guidance generated successfully")
+
+        return guidance.text, depth_buckets

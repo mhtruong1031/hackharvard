@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YeongSil - Navigation Assistant</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+            text-align: center;
+        }
+        
+        h1 {
+            margin-bottom: 30px;
+            font-size: 2em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .camera-container {
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+            backdrop-filter: blur(10px);
+        }
+        
+        #video {
+            width: 100%;
+            max-width: 350px;
+            height: 250px;
+            border-radius: 10px;
+            background: #000;
+            object-fit: cover;
+        }
+        
+        .controls {
+            margin: 20px 0;
+        }
+        
+        button {
+            background: rgba(255,255,255,0.2);
+            border: 2px solid rgba(255,255,255,0.3);
+            color: white;
+            padding: 15px 30px;
+            margin: 10px;
+            border-radius: 25px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+        
+        button:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-2px);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+            min-height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .processing {
+            animation: pulse 1.5s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .guidance {
+            background: rgba(0,0,0,0.3);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            text-align: left;
+            line-height: 1.6;
+        }
+        
+        .voice-indicator {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #ff4444;
+            display: inline-block;
+            margin-right: 10px;
+            animation: blink 1s infinite;
+        }
+        
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.3; }
+        }
+        
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>YeongSil</h1>
+        <p>Navigation Assistant for the Visually Impaired</p>
+        
+        <div class="camera-container">
+            <video id="video" autoplay muted></video>
+            <canvas id="canvas" class="hidden"></canvas>
+        </div>
+        
+        <div class="controls">
+            <button id="startService">Start Navigation Service</button>
+            <button id="speakButton" disabled class="hidden">Speak Guidance</button>
+        </div>
+        
+        <div id="status" class="status">
+            Tap "Start Navigation Service" to begin always-listening navigation assistance
+        </div>
+        
+        <div id="guidance" class="guidance hidden">
+            <h3>Navigation Guidance:</h3>
+            <p id="guidanceText"></p>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <script>
+        class YeongSilApp {
+            constructor() {
+                this.video = document.getElementById('video');
+                this.canvas = document.getElementById('canvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.status = document.getElementById('status');
+                this.guidance = document.getElementById('guidance');
+                this.guidanceText = document.getElementById('guidanceText');
+                
+                this.currentGuidance = '';
+                this.isProcessing = false;
+                this.isContinuousMode = false;
+                this.isListening = false;
+                this.serverUrl = window.location.origin; // Use same host as the page
+                
+                // Initialize WebSocket connection
+                this.socket = io();
+                this.setupWebSocketListeners();
+                
+                this.setupEventListeners();
+                this.checkServerConnection();
+                
+                // Continuous processing variables
+                this.frameInterval = null;
+                this.audioInterval = null;
+                this.mediaRecorder = null;
+                this.audioChunks = [];
+            }
+            
+            setupEventListeners() {
+                document.getElementById('startService').addEventListener('click', () => this.toggleNavigationService());
+                document.getElementById('speakButton').addEventListener('click', () => this.speakGuidance());
+            }
+            
+            setupWebSocketListeners() {
+                this.socket.on('connect', () => {
+                    console.log('Connected to server');
+                    this.updateStatus('Connected to server');
+                });
+                
+                this.socket.on('disconnect', () => {
+                    console.log('Disconnected from server');
+                    this.updateStatus('Disconnected from server');
+                });
+                
+                this.socket.on('status', (data) => {
+                    this.updateStatus(data.message);
+                });
+                
+                this.socket.on('analysis_result', (data) => {
+                    this.currentGuidance = data.guidance;
+                    this.guidanceText.textContent = data.guidance;
+                    this.guidance.classList.remove('hidden');
+                    document.getElementById('speakButton').disabled = false;
+                    
+                    if (data.type === 'continuous_scan') {
+                        this.updateStatus('Continuous scan complete! Tap Speak to hear guidance.');
+                    } else {
+                        this.updateStatus('Analysis complete! Tap Speak to hear guidance.');
+                    }
+                });
+                
+                this.socket.on('voice_command_detected', (data) => {
+                    this.updateStatus(`Voice command detected: "${data.text}"`);
+                    this.speakText('Scanning surroundings now...');
+                });
+                
+                this.socket.on('trigger_immediate_scan', (data) => {
+                    this.updateStatus('Processing immediate scan...');
+                });
+            }
+            
+            async checkServerConnection() {
+                try {
+                    const response = await fetch(`${this.serverUrl}/health`);
+                    const data = await response.json();
+                    this.updateStatus('Connected to server');
+                } catch (error) {
+                    this.updateStatus('Server connection failed. Make sure server is running.');
+                }
+            }
+            
+            toggleNavigationService() {
+                if (!this.isContinuousMode) {
+                    this.startNavigationService();
+                } else {
+                    this.stopNavigationService();
+                }
+            }
+            
+            async startNavigationService() {
+                try {
+                    // Request camera and microphone access
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { 
+                            width: { ideal: 640 }, 
+                            height: { ideal: 480 },
+                            facingMode: 'environment' // Use back camera on mobile
+                        },
+                        audio: true // Enable audio for voice commands
+                    });
+                    
+                    this.video.srcObject = stream;
+                    
+                    // Start continuous processing immediately
+                    this.isContinuousMode = true;
+                    this.isListening = true;
+                    
+                    // Update UI
+                    document.getElementById('startService').textContent = 'Stop Service';
+                    document.getElementById('startService').style.background = 'rgba(255,100,100,0.3)';
+                    document.getElementById('speakButton').classList.remove('hidden');
+                    this.updateStatus('Navigation service started - always listening for "scan surroundings"');
+                    
+                    // Start continuous frame capture
+                    this.startContinuousFrameCapture();
+                    
+                    // Start continuous audio capture
+                    this.startContinuousAudioCapture();
+                    
+                    // Notify server
+                    this.socket.emit('start_continuous_mode');
+                    
+                } catch (error) {
+                    this.updateStatus('Access denied. Please allow camera and microphone access.');
+                    console.error('Service start error:', error);
+                }
+            }
+            
+            stopNavigationService() {
+                this.isContinuousMode = false;
+                this.isListening = false;
+                
+                // Update UI
+                document.getElementById('startService').textContent = 'Start Navigation Service';
+                document.getElementById('startService').style.background = 'rgba(255,255,255,0.2)';
+                document.getElementById('speakButton').classList.add('hidden');
+                this.updateStatus('Navigation service stopped');
+                
+                // Stop continuous capture
+                this.stopContinuousFrameCapture();
+                this.stopContinuousAudioCapture();
+                
+                // Stop video stream
+                if (this.video.srcObject) {
+                    this.video.srcObject.getTracks().forEach(track => track.stop());
+                    this.video.srcObject = null;
+                }
+                
+                // Notify server
+                this.socket.emit('stop_continuous_mode');
+            }
+            
+            startContinuousFrameCapture() {
+                // Capture frames every 2 seconds for continuous processing
+                this.frameInterval = setInterval(() => {
+                    if (this.isContinuousMode && this.video.videoWidth > 0) {
+                        this.captureAndSendFrame();
+                    }
+                }, 2000); // Every 2 seconds
+            }
+            
+            stopContinuousFrameCapture() {
+                if (this.frameInterval) {
+                    clearInterval(this.frameInterval);
+                    this.frameInterval = null;
+                }
+            }
+            
+            startContinuousAudioCapture() {
+                if (!this.video.srcObject) return;
+                
+                try {
+                    const audioStream = this.video.srcObject.getAudioTracks()[0];
+                    if (!audioStream) return;
+                    
+                    // Create media recorder for audio
+                    this.mediaRecorder = new MediaRecorder(audioStream);
+                    this.audioChunks = [];
+                    
+                    this.mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            this.audioChunks.push(event.data);
+                        }
+                    };
+                    
+                    this.mediaRecorder.onstop = () => {
+                        if (this.audioChunks.length > 0) {
+                            this.sendAudioData();
+                        }
+                    };
+                    
+                    // Record audio in 3-second chunks
+                    this.audioInterval = setInterval(() => {
+                        if (this.isListening && this.mediaRecorder.state === 'inactive') {
+                            this.audioChunks = [];
+                            this.mediaRecorder.start();
+                            
+                            setTimeout(() => {
+                                if (this.mediaRecorder.state === 'recording') {
+                                    this.mediaRecorder.stop();
+                                }
+                            }, 3000);
+                        }
+                    }, 3500); // Slightly longer than recording time
+                    
+                } catch (error) {
+                    console.error('Audio capture error:', error);
+                }
+            }
+            
+            stopContinuousAudioCapture() {
+                if (this.audioInterval) {
+                    clearInterval(this.audioInterval);
+                    this.audioInterval = null;
+                }
+                
+                if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                    this.mediaRecorder.stop();
+                }
+            }
+            
+            captureAndSendFrame() {
+                if (!this.video.videoWidth) return;
+                
+                // Capture frame
+                this.canvas.width = this.video.videoWidth;
+                this.canvas.height = this.video.videoHeight;
+                this.ctx.drawImage(this.video, 0, 0);
+                
+                // Convert to base64
+                const imageData = this.canvas.toDataURL('image/jpeg', 0.7);
+                const base64Data = imageData.split(',')[1];
+                
+                // Send via WebSocket
+                this.socket.emit('frame_data', {
+                    frame: base64Data,
+                    timestamp: Date.now()
+                });
+            }
+            
+            sendAudioData() {
+                if (this.audioChunks.length === 0) return;
+                
+                const audioBlob = new Blob(this.audioChunks, { type: 'audio/wav' });
+                const reader = new FileReader();
+                
+                reader.onload = () => {
+                    const base64Audio = reader.result.split(',')[1];
+                    this.socket.emit('audio_data', {
+                        audio: base64Audio,
+                        timestamp: Date.now()
+                    });
+                };
+                
+                reader.readAsDataURL(audioBlob);
+            }
+            
+            
+            speakGuidance() {
+                if (this.currentGuidance) {
+                    this.speakText(this.currentGuidance);
+                }
+            }
+            
+            speakText(text) {
+                if ('speechSynthesis' in window) {
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.rate = 0.9;
+                    utterance.pitch = 1;
+                    utterance.volume = 1;
+                    
+                    utterance.onstart = () => {
+                        this.updateStatus('Speaking...', true);
+                    };
+                    
+                    utterance.onend = () => {
+                        this.updateStatus('Ready for next command');
+                    };
+                    
+                    speechSynthesis.speak(utterance);
+                } else {
+                    this.updateStatus('Text-to-speech not supported');
+                }
+            }
+            
+            updateStatus(message, isProcessing = false) {
+                this.status.textContent = message;
+                if (isProcessing) {
+                    this.status.classList.add('processing');
+                } else {
+                    this.status.classList.remove('processing');
+                }
+            }
+        }
+        
+        // Initialize app when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new YeongSilApp();
+        });
+    </script>
+</body>
+</html>
