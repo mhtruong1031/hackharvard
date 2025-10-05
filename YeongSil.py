@@ -26,15 +26,18 @@ class YeongSil:
         
         # Load and prepare image
         step_start = time.time()
+        img = cv2.imread(image_path)
+        # Resize image to 600x600 for faster processing
+        img = cv2.resize(img, (600, 600))
+        
         with open(image_path, 'rb') as f:
             image_bytes = f.read()
         print(f"[{time.time() - start_time:.1f}s] Image loaded from disk")
 
-        img = cv2.imread(image_path)
-        # Resize image for faster processing (optional: adjust size as needed)
-        img = cv2.resize(img, (256, 256))  # Smaller size for faster processing
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        input_batch = self.transform(img).to(device)
+        # Resize image for depth processing (smaller size for faster processing)
+        img_small = cv2.resize(img, (256, 256))  # Smaller size for depth processing
+        img_small = cv2.cvtColor(img_small, cv2.COLOR_BGR2RGB)
+        input_batch = self.transform(img_small).to(device)
         print(f"[{time.time() - start_time:.1f}s] Image preprocessed and transformed")
         
         # Depth estimation
@@ -123,9 +126,37 @@ class YeongSil:
             contents=[
                 f'Please advise the blind user on how to traverse the following environment: {desc}.',
                 f'The depth values are from 0-180 degrees, and how many units forward there, where 90 degrees is directly forward, but refer to them as 0-90 degrees right or left: {depth_desc}.',
-                'Please advise in 1-2 sentences of 2 clauses max with environmental context, with instructions first.'
+                'Please advise in 1-2 sentences of 2 clauses max with environmental context, with instructions including angle of travel first.'
             ]
         )
         print(f"[{time.time() - start_time:.1f}s] Navigation guidance generated successfully")
 
         return guidance.text, depth_buckets
+
+    def get_text_from_image(self, image_path: str):
+        """Extract text from an image using Gemini Vision API"""
+        start_time = time.time()
+        print(f"[{0:.1f}s] Starting text extraction from image...")
+        
+        # Load image bytes
+        with open(image_path, 'rb') as f:
+            image_bytes = f.read()
+        print(f"[{time.time() - start_time:.1f}s] Image loaded for text extraction")
+        
+        # Extract text using Gemini
+        text_result = self.gemini.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[
+                types.Part.from_bytes(
+                    data=image_bytes,
+                    mime_type='image/jpeg',
+                ),
+                'Extract and read all text visible in this image. If there is text, provide it exactly as it appears. If there is no text, say "No text found in the image."'
+            ]
+        )
+        
+        extracted_text = text_result.text
+        print(f"[{time.time() - start_time:.1f}s] Text extraction completed")
+        print(f"[{time.time() - start_time:.1f}s] Extracted text: {extracted_text[:100]}...")
+        
+        return extracted_text

@@ -395,7 +395,13 @@
             socket.on('voice_command_detected', (data) => {
                 console.log('🎤 Voice command detected:', data.command);
                 updateStatus('Voice command detected: ' + data.command);
-                speakText('Scanning environment now...');
+                
+                // Provide appropriate feedback based on command type
+                if (data.command.includes('read')) {
+                    speakTextWithUserInteraction('Reading text from image now...');
+                } else {
+                    speakTextWithUserInteraction('Scanning environment now...');
+                }
             });
 
             socket.on('voice_analysis_result', (data) => {
@@ -465,7 +471,7 @@
                 speakButton.disabled = false;
                 speakButton.classList.remove('hidden');
                 voiceIndicator.classList.remove('hidden');
-                updateStatus('Navigation service active - say "scan surroundings"');
+                updateStatus('Navigation service active - say "scan surroundings" or "read text"');
 
                 console.log('✅ Navigation service started successfully');
 
@@ -556,9 +562,9 @@
             }
         }
 
-        // Start continuous audio capture
+        // Start continuous audio capture with overlapping chunks
         function startAudioCapture() {
-            console.log('🎤 Starting audio capture...');
+            console.log('🎤 Starting overlapping audio capture...');
             
             try {
                 // Create MediaRecorder for audio with fallback formats
@@ -580,6 +586,7 @@
                 mediaRecorder = new MediaRecorder(audioStream, { mimeType });
 
                 let audioChunks = [];
+                let isRecording = false;
 
                 mediaRecorder.ondataavailable = (event) => {
                     if (event.data.size > 0) {
@@ -607,19 +614,22 @@
                     } else {
                         console.log('⚠️ Audio chunk too small or too large:', audioBlob.size);
                     }
+                    isRecording = false;
                 };
 
-                // Start recording in 3-second chunks for better battery life
+                // Continuous overlapping recording for smoother voice detection
+                // Record 2-second chunks every 1 second for 50% overlap
                 audioInterval = setInterval(() => {
-                    if (isServiceActive && mediaRecorder.state === 'inactive') {
+                    if (isServiceActive && !isRecording) {
+                        isRecording = true;
                         mediaRecorder.start();
                         setTimeout(() => {
                             if (mediaRecorder.state === 'recording') {
                                 mediaRecorder.stop();
                             }
-                        }, 3000);
+                        }, 2000); // 2-second chunks
                     }
-                }, 3000);
+                }, 1000); // Start new chunk every 1 second
 
             } catch (error) {
                 console.error('❌ Error setting up audio capture:', error);
@@ -661,7 +671,7 @@
                     
                     utterance.onend = () => {
                         console.log('🔊 Speech completed');
-                        updateStatus('Navigation service active - say "scan surroundings"');
+                        updateStatus('Navigation service active - say "scan surroundings" or "read text"');
                     };
                     
                     utterance.onerror = (event) => {
@@ -692,6 +702,73 @@
             speakText(testText);
         }
 
+        // Initialize speech synthesis (required for some browsers)
+        function initializeSpeechSynthesis() {
+            if ('speechSynthesis' in window) {
+                // Try to speak a silent utterance to initialize the speech engine
+                const silentUtterance = new SpeechSynthesisUtterance('');
+                silentUtterance.volume = 0;
+                speechSynthesis.speak(silentUtterance);
+                console.log('🔊 Speech synthesis initialized');
+            }
+        }
+
+        // Speak text with user interaction workaround
+        function speakTextWithUserInteraction(text) {
+            console.log('🔊 Attempting to speak with user interaction workaround:', text);
+            
+            if (!text || text.trim() === '') {
+                console.warn('⚠️ Empty text provided to speakTextWithUserInteraction');
+                return;
+            }
+            
+            if ('speechSynthesis' in window) {
+                // Cancel any ongoing speech
+                speechSynthesis.cancel();
+                
+                // Wait a moment for cancellation to complete
+                setTimeout(() => {
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.rate = 1.1;
+                    utterance.pitch = 1.0;
+                    utterance.volume = 1.0;
+                    
+                    utterance.onstart = () => {
+                        console.log('🔊 Speech started with user interaction workaround:', text.substring(0, 50) + '...');
+                        updateStatus('Speaking feedback...');
+                    };
+                    
+                    utterance.onend = () => {
+                        console.log('🔊 Speech completed with user interaction workaround');
+                        updateStatus('Navigation service active - say "scan surroundings" or "read text"');
+                    };
+                    
+                    utterance.onerror = (event) => {
+                        console.error('❌ Speech error with user interaction workaround:', event.error);
+                        updateStatus('Speech error: ' + event.error);
+                    };
+                    
+                    console.log('🔊 Starting speech synthesis with user interaction workaround...');
+                    speechSynthesis.speak(utterance);
+                    
+                    // Force speech synthesis to start (some browsers require user interaction first)
+                    if (speechSynthesis.pending) {
+                        console.log('🔊 Speech is pending, forcing start...');
+                        setTimeout(() => {
+                            if (speechSynthesis.pending) {
+                                console.log('🔊 Forcing speech to start...');
+                                speechSynthesis.resume();
+                            }
+                        }, 200);
+                    }
+                }, 100);
+                
+            } else {
+                console.warn('⚠️ Speech synthesis not supported');
+                updateStatus('Speech synthesis not supported on this device');
+            }
+        }
+
         // Debug function to check WebSocket connection
         function debugWebSocket() {
             console.log('🔍 WebSocket debug info:');
@@ -717,6 +794,12 @@
             console.log('📱 DOM loaded, initializing app...');
             initializeSocket();
             updateStatus('Ready to start navigation service');
+            
+            // Initialize speech synthesis when user first interacts
+            document.addEventListener('click', () => {
+                initializeSpeechSynthesis();
+                document.removeEventListener('click', initializeSpeechSynthesis);
+            }, { once: true });
         });
 
         // Handle page visibility changes

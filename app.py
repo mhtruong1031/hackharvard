@@ -23,6 +23,8 @@ is_listening = False
 yeongsil_ai = None
 processing_queue = []
 max_queue_size = 3  # Limit processing queue for performance
+audio_processing_lock = threading.Lock()  # Prevent concurrent audio processing
+last_processed_audio = 0  # Timestamp of last processed audio to prevent duplicate processing
 
 # Initialize YeongSil AI
 try:
@@ -131,58 +133,72 @@ def handle_frame_data(data):
 
 @socketio.on('audio_data')
 def handle_audio_data(data):
-    """Handle audio data for voice recognition"""
+    """Handle audio data for voice recognition with deduplication"""
+    global last_processed_audio
+    
     try:
-        # Decode base64 audio
-        audio_data = base64.b64decode(data['audio'])
-        audio_format = data.get('format', 'audio/webm')
+        current_time = time.time()
         
-        print(f"🎤 Received audio data: {len(audio_data)} bytes, format: {audio_format}")
+        # Prevent processing too many audio chunks in quick succession
+        # This helps with the overlapping audio chunks
+        if current_time - last_processed_audio < 0.5:  # 500ms minimum between processing
+            print(f"🎤 Skipping audio chunk (too recent): {current_time - last_processed_audio:.2f}s ago")
+            return
         
-        # Determine file extension based on format
-        if 'webm' in audio_format:
-            suffix = '.webm'
-        elif 'mp4' in audio_format:
-            suffix = '.mp4'
-        elif 'wav' in audio_format:
-            suffix = '.wav'
-        else:
-            suffix = '.webm'  # Default fallback
-        
-        # Save audio file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as audio_file:
-            audio_file.write(audio_data)
-            audio_path = audio_file.name
-        
-        # Process based on format
-        if suffix == '.wav':
-            # Direct processing for WAV
-            process_voice_command(audio_path)
-        else:
-            # Convert other formats to WAV
-            try:
-                # Try ffmpeg conversion first
-                wav_path = audio_path.replace(suffix, '.wav')
-                import subprocess
-                result = subprocess.run([
-                    'ffmpeg', '-i', audio_path, '-acodec', 'pcm_s16le', 
-                    '-ar', '16000', '-ac', '1', wav_path, '-y'
-                ], capture_output=True, timeout=5)
-                
-                if result.returncode == 0:
-                    process_voice_command(wav_path)
-                    os.unlink(wav_path)
-                else:
+        with audio_processing_lock:
+            # Decode base64 audio
+            audio_data = base64.b64decode(data['audio'])
+            audio_format = data.get('format', 'audio/webm')
+            
+            print(f"🎤 Processing audio data: {len(audio_data)} bytes, format: {audio_format}")
+            
+            # Determine file extension based on format
+            if 'webm' in audio_format:
+                suffix = '.webm'
+            elif 'mp4' in audio_format:
+                suffix = '.mp4'
+            elif 'wav' in audio_format:
+                suffix = '.wav'
+            else:
+                suffix = '.webm'  # Default fallback
+            
+            # Save audio file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as audio_file:
+                audio_file.write(audio_data)
+                audio_path = audio_file.name
+            
+            # Process based on format
+            if suffix == '.wav':
+                # Direct processing for WAV
+                process_voice_command(audio_path)
+            else:
+                # Convert other formats to WAV
+                try:
+                    # Try ffmpeg conversion first
+                    wav_path = audio_path.replace(suffix, '.wav')
+                    import subprocess
+                    result = subprocess.run([
+                        'ffmpeg', '-i', audio_path, '-acodec', 'pcm_s16le', 
+                        '-ar', '16000', '-ac', '1', wav_path, '-y'
+                    ], capture_output=True, timeout=3)  # Reduced timeout for faster processing
+                    
+                    if result.returncode == 0:
+                        process_voice_command(wav_path)
+                        os.unlink(wav_path)
+                    else:
+                        # Fallback: try pydub conversion
+                        process_voice_command_webm(audio_path)
+                        
+                except (subprocess.TimeoutExpired, FileNotFoundError):
                     # Fallback: try pydub conversion
                     process_voice_command_webm(audio_path)
-                    
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                # Fallback: try pydub conversion
-                process_voice_command_webm(audio_path)
-        
-        # Clean up
-        if os.path.exists(audio_path):
-            os.unlink(audio_path)
+            
+            # Clean up
+            if os.path.exists(audio_path):
+                os.unlink(audio_path)
+            
+            # Update last processed timestamp
+            last_processed_audio = current_time
         
     except Exception as e:
         print(f"❌ Error processing audio: {e}")
@@ -197,13 +213,18 @@ def process_voice_command(audio_path):
         with sr.AudioFile(audio_path) as source:
             audio = recognizer.record(source)
         
-        # Try Google Speech Recognition
+        # Try Google Speech Recognition with improved settings
         try:
-            text = recognizer.recognize_google(audio).lower()
+            # Configure recognizer for better accuracy
+            recognizer.energy_threshold = 300
+            recognizer.dynamic_energy_threshold = True
+            recognizer.pause_threshold = 0.8
+            
+            text = recognizer.recognize_google(audio, language='en-US').lower()
             print(f"🎤 Recognized: '{text}'")
             
-            # Check for "scan surroundings" command
-            if "scan surroundings" in text or "scan" in text:
+            # Check for "scan surroundings" command (more flexible matching)
+            if any(phrase in text for phrase in ["scan surroundings", "scan", "scanning"]):
                 print("✅ Voice command detected: scan surroundings")
                 emit('voice_command_detected', {'command': text})
                 
@@ -212,8 +233,20 @@ def process_voice_command(audio_path):
                     process_immediate_scan()
                 else:
                     emit('voice_analysis_error', {'error': 'No frame available or YeongSil not ready'})
+            # Check for "read" command (more flexible matching)
+            elif any(phrase in text for phrase in ["read", "reading", "read this", "read that"]):
+                print("✅ Voice command detected: read text")
+                emit('voice_command_detected', {'command': text})
+                
+                # Process latest frame for text extraction if available
+                if latest_frame and yeongsil_ai:
+                    process_text_extraction()
+                else:
+                    emit('voice_analysis_error', {'error': 'No frame available or YeongSil not ready'})
             else:
-                emit('voice_detected', {'text': text})
+                # Only emit voice_detected for longer phrases to reduce noise
+                if len(text.split()) >= 2:
+                    emit('voice_detected', {'text': text})
                 
         except sr.UnknownValueError:
             print("🎤 Could not understand audio")
@@ -327,6 +360,58 @@ def process_immediate_scan():
         if processing_queue:
             processing_queue.pop(0)
         print(f"❌ Error in immediate scan: {e}")
+        emit('voice_analysis_error', {'error': str(e)})
+
+def process_text_extraction():
+    """Process text extraction with latest frame"""
+    global processing_queue
+    
+    try:
+        print("📖 Processing text extraction...")
+        
+        # Check processing queue to prevent overload
+        if len(processing_queue) >= max_queue_size:
+            print("⚠️ Processing queue full, skipping text extraction")
+            emit('voice_analysis_error', {'error': 'Processing queue full, please wait'})
+            return
+        
+        # Add to processing queue
+        processing_queue.append(time.time())
+        
+        # Decode base64 image
+        image_data = base64.b64decode(latest_frame.split(',')[1])
+        
+        # Save to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+            tmp_file.write(image_data)
+            tmp_path = tmp_file.name
+        
+        # Process with YeongSil text extraction
+        extracted_text = yeongsil_ai.get_text_from_image(tmp_path)
+        
+        # Clean up
+        os.unlink(tmp_path)
+        
+        # Remove from processing queue
+        if processing_queue:
+            processing_queue.pop(0)
+        
+        # Log the extracted text for debugging
+        print(f"📖 Extracted text: {extracted_text}")
+        
+        # Send results
+        emit('voice_analysis_result', {
+            'guidance': extracted_text,
+            'depth_buckets': []  # No depth data for text extraction
+        })
+        
+        print("✅ Text extraction completed - text sent to frontend")
+        
+    except Exception as e:
+        # Remove from processing queue on error
+        if processing_queue:
+            processing_queue.pop(0)
+        print(f"❌ Error in text extraction: {e}")
         emit('voice_analysis_error', {'error': str(e)})
 
 # Note: Continuous voice processing is now handled via WebSocket audio_data events
