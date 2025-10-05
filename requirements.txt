@@ -11,3 +11,5 @@ SpeechRecognition
 PyAudio
 python-socketio
 eventlet
+pydub
+requests

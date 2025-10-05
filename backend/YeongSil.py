@@ -79,7 +79,7 @@ class YeongSil:
                     data      = image_bytes,
                     mime_type = 'image/jpeg',
                 ),
-                'Describe what is in the image, including positions of large/major objects (far left, left, middle, right, far right), referring to it as "your view" in 2 sentences.'
+                'Describe what is in the image, including positions of large/major objects (far left, left, middle, right, far right), referring to it as "your view" in 5 sentences.'
             ]
         )
         print(f"[{time.time() - start_time:.1f}s] Gemini image description completed")
@@ -116,13 +116,13 @@ class YeongSil:
         desc, depth_buckets = self.__process_image(image_path)
         print(f"[{time.time() - start_time:.1f}s] Image processing completed, generating guidance...")
 
-        depth_desc = '\n'.join([f'{dist} degrees: {depth_buckets[i]:.2f} units of space' for i, dist in enumerate(range(-85, 85, 10))])
+        depth_desc = '\n'.join([f'{dist} degrees: {depth_buckets[i]:.2f} units of space.' for i, dist in enumerate(range(-85, 85, 10))])
 
         guidance = self.gemini.models.generate_content(
             model='gemini-2.5-flash',
             contents=[
                 f'Please advise the blind user on how to traverse the following environment: {desc}.',
-                f'The depth values are from 0-180 degrees, and how many units forward there, where 90 degrees is directly forward, but refer to them as 0-90 degrees right or left: {depth_desc}.',
+                f'The depth values are from 0-180 degrees, and how many units forward there, where 90 degrees is directly forward, but please refer to them as 0-90 degrees right or left of forward: {depth_desc}.',
                 'Please advise in 1-2 sentences of 2 clauses max with environmental context, with instructions first.'
             ]
         )

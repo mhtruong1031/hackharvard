@@ -132,10 +132,15 @@
         <div class="controls">
             <button id="startService">Start Navigation Service</button>
             <button id="speakButton" disabled class="hidden">Speak Guidance</button>
+            <button id="testTTS" onclick="testTTS()">Test TTS</button>
+            <button onclick="debugWebSocket()">Debug Info</button>
         </div>
         
         <div id="status" class="status">
-            Tap "Start Navigation Service" to begin always-listening navigation assistance
+            <span id="voiceIndicator" class="hidden">
+                <span class="voice-indicator"></span>
+            </span>
+            <span id="statusText">Tap "Start Navigation Service" to begin always-listening navigation assistance</span>
         </div>
         
         <div id="guidance" class="guidance hidden">
@@ -146,306 +151,591 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
     <script>
-        class YeongSilApp {
-            constructor() {
-                this.video = document.getElementById('video');
-                this.canvas = document.getElementById('canvas');
-                this.ctx = this.canvas.getContext('2d');
-                this.status = document.getElementById('status');
-                this.guidance = document.getElementById('guidance');
-                this.guidanceText = document.getElementById('guidanceText');
-                
-                this.currentGuidance = '';
-                this.isProcessing = false;
-                this.isContinuousMode = false;
-                this.isListening = false;
-                this.serverUrl = window.location.origin; // Use same host as the page
-                
-                // Initialize WebSocket connection
-                this.socket = io();
-                this.setupWebSocketListeners();
-                
-                this.setupEventListeners();
-                this.checkServerConnection();
-                
-                // Continuous processing variables
-                this.frameInterval = null;
-                this.audioInterval = null;
-                this.mediaRecorder = null;
-                this.audioChunks = [];
-            }
+        /*
+        ================================================
+        YeongSil Mobile App - High Level Pseudocode
+        ================================================
+        
+        OVERVIEW:
+        - Mobile web app for visually impaired navigation
+        - Real-time camera feed with voice command processing
+        - WebSocket communication with Flask backend
+        - Always-listening voice recognition system
+        
+        MAIN FEATURES:
+        1. Camera Access & Video Display
+        2. Voice Command Recognition
+        3. Real-time Navigation Guidance
+        4. Text-to-Speech Feedback
+        5. WebSocket Communication
+        */
+        
+        /*
+        PSEUDOCODE FOR APP INITIALIZATION:
+        ==================================
+        1. Initialize DOM element references
+        2. Set up application state variables
+        3. Initialize WebSocket connection
+        4. Set up event listeners
+        5. Check server connectivity
+        6. Initialize continuous processing variables
+        */
+        
+        /*
+        PSEUDOCODE FOR WEBSOCKET COMMUNICATION:
+        =======================================
+        
+        CONNECT:
+        - Establish connection to Flask server
+        - Send welcome message
+        - Update UI status
+        
+        DISCONNECT:
+        - Handle connection loss
+        - Update UI status
+        - Clean up resources
+        
+        LISTEN FOR EVENTS:
+        - 'status': Update status message
+        - 'analysis_result': Display navigation guidance
+        - 'voice_analysis_result': Handle voice-triggered analysis
+        - 'voice_command_detected': Confirm voice command
+        - 'trigger_immediate_scan': Process immediate scan
+        - 'voice_detected': Handle unrecognized speech
+        - 'voice_processing_error': Handle audio errors
+        - 'voice_command_error': Handle command errors
+        - 'voice_analysis_error': Handle analysis errors
+        */
+        
+        /*
+        PSEUDOCODE FOR NAVIGATION SERVICE:
+        ==================================
+        
+        START SERVICE:
+        1. Request camera and microphone permissions
+        2. Initialize video stream with back camera
+        3. Enable continuous frame capture (every 2 seconds)
+        4. Enable continuous audio capture (2-second chunks)
+        5. Update UI to show listening state
+        6. Send 'start_continuous_mode' to server
+        7. Show voice indicator (red blinking dot)
+        
+        STOP SERVICE:
+        1. Stop all continuous capture processes
+        2. Stop video stream and release resources
+        3. Update UI to show stopped state
+        4. Send 'stop_continuous_mode' to server
+        5. Hide voice indicator
+        */
+        
+        /*
+        PSEUDOCODE FOR CAMERA PROCESSING:
+        ================================
+        
+        FRAME CAPTURE:
+        1. Draw current video frame to canvas
+        2. Convert canvas to base64 JPEG (70% quality)
+        3. Send frame data via WebSocket with timestamp
+        4. Repeat every 2 seconds while service active
+        
+        FRAME PROCESSING:
+        1. Receive frame data from camera
+        2. Store as latest frame for voice command processing
+        3. Send to server for YeongSil AI analysis
+        4. Display results in guidance section
+        */
+        
+        /*
+        PSEUDOCODE FOR AUDIO PROCESSING:
+        ================================
+        
+        AUDIO CAPTURE:
+        1. Create MediaRecorder with WebM/Opus format
+        2. Fallback to WAV if WebM not supported
+        3. Record audio in 2-second chunks
+        4. Validate audio blob size (1KB - 1MB)
+        5. Convert to base64 and send via WebSocket
+        
+        AUDIO VALIDATION:
+        1. Check audio blob size
+        2. Verify MIME type compatibility
+        3. Handle recording errors gracefully
+        4. Provide user feedback for issues
+        */
+        
+        /*
+        PSEUDOCODE FOR VOICE COMMAND HANDLING:
+        ======================================
+        
+        VOICE DETECTION:
+        1. Listen for 'voice_command_detected' events
+        2. Display detected command text
+        3. Speak confirmation: "Scanning surroundings now..."
+        4. Trigger immediate frame processing
+        
+        VOICE ANALYSIS:
+        1. Listen for 'voice_analysis_result' events
+        2. Display navigation guidance
+        3. Enable "Speak Guidance" button
+        4. Auto-speak guidance if auto_speak flag is true
+        
+        ERROR HANDLING:
+        1. Display user-friendly error messages
+        2. Log detailed errors to console
+        3. Provide recovery suggestions
+        4. Maintain service availability
+        */
+        
+        /*
+        PSEUDOCODE FOR TEXT-TO-SPEECH:
+        ==============================
+        
+        SPEAK GUIDANCE:
+        1. Use Web Speech API SpeechSynthesis
+        2. Configure utterance settings:
+           - Rate: 0.9 (slightly slower)
+           - Pitch: 1.0 (normal)
+           - Volume: 1.0 (full volume)
+        3. Handle speech start/end events
+        4. Update UI status during speaking
+        5. Fallback message if TTS not supported
+        */
+        
+        /*
+        PSEUDOCODE FOR UI MANAGEMENT:
+        ============================
+        
+        STATUS UPDATES:
+        1. Display current operation status
+        2. Show processing animations
+        3. Update voice indicator visibility
+        4. Provide user feedback for all actions
+        
+        BUTTON STATES:
+        1. Enable/disable based on service state
+        2. Change appearance for active/inactive states
+        3. Show/hide buttons as needed
+        4. Provide visual feedback for interactions
+        */
+        
+        /*
+        PSEUDOCODE FOR ERROR RECOVERY:
+        ==============================
+        
+        CONNECTION ISSUES:
+        1. Detect server connectivity problems
+        2. Provide clear error messages
+        3. Suggest troubleshooting steps
+        4. Auto-retry when possible
+        
+        PERMISSION ISSUES:
+        1. Handle camera/microphone access denial
+        2. Provide permission request guidance
+        3. Fallback to manual operation if needed
+        
+        PROCESSING ERRORS:
+        1. Handle speech recognition failures
+        2. Handle image processing errors
+        3. Provide alternative operation modes
+        4. Maintain basic functionality
+        */
+        
+        /*
+        IMPLEMENTATION NOTES:
+        ====================
+        - All functions should handle errors gracefully
+        - User feedback should be clear and helpful
+        - Performance should be optimized for mobile devices
+        - Accessibility features should be prioritized
+        - Continuous operation should be maintained when possible
+        */
+        
+        // YeongSil Mobile App - Full Implementation
+        console.log('🚀 YeongSil Mobile App - Initializing...');
+
+        // DOM Elements
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const startButton = document.getElementById('startService');
+        const speakButton = document.getElementById('speakButton');
+        const statusDiv = document.getElementById('status');
+        const statusText = document.getElementById('statusText');
+        const voiceIndicator = document.getElementById('voiceIndicator');
+        const guidanceDiv = document.getElementById('guidance');
+        const guidanceText = document.getElementById('guidanceText');
+
+        // Application State
+        let socket = null;
+        let stream = null;
+        let mediaRecorder = null;
+        let isServiceActive = false;
+        let frameInterval = null;
+        let audioInterval = null;
+        let currentGuidance = null;
+
+        // Initialize WebSocket connection
+        function initializeSocket() {
+            socket = io();
             
-            setupEventListeners() {
-                document.getElementById('startService').addEventListener('click', () => this.toggleNavigationService());
-                document.getElementById('speakButton').addEventListener('click', () => this.speakGuidance());
-            }
-            
-            setupWebSocketListeners() {
-                this.socket.on('connect', () => {
-                    console.log('Connected to server');
-                    this.updateStatus('Connected to server');
-                });
+            socket.on('connect', () => {
+                console.log('✅ Connected to server');
+                updateStatus('Connected to YeongSil Navigation Assistant');
+            });
+
+            socket.on('disconnect', () => {
+                console.log('❌ Disconnected from server');
+                updateStatus('Disconnected from server');
+                stopService();
+            });
+
+            socket.on('status', (data) => {
+                updateStatus(data.message);
+            });
+
+            socket.on('voice_command_detected', (data) => {
+                console.log('🎤 Voice command detected:', data.command);
+                updateStatus('Voice command detected: ' + data.command);
+                speakText('Scanning environment now...');
+            });
+
+            socket.on('voice_analysis_result', (data) => {
+                console.log('🔍 Analysis result received:', data);
+                console.log('🔍 Guidance text:', data.guidance);
+                currentGuidance = data.guidance;
+                displayGuidance(data.guidance);
                 
-                this.socket.on('disconnect', () => {
-                    console.log('Disconnected from server');
-                    this.updateStatus('Disconnected from server');
-                });
-                
-                this.socket.on('status', (data) => {
-                    this.updateStatus(data.message);
-                });
-                
-                this.socket.on('analysis_result', (data) => {
-                    this.currentGuidance = data.guidance;
-                    this.guidanceText.textContent = data.guidance;
-                    this.guidance.classList.remove('hidden');
-                    document.getElementById('speakButton').disabled = false;
-                    
-                    if (data.type === 'continuous_scan') {
-                        this.updateStatus('Continuous scan complete! Tap Speak to hear guidance.');
-                    } else {
-                        this.updateStatus('Analysis complete! Tap Speak to hear guidance.');
+                // Immediately speak the guidance
+                console.log('🔊 Speaking guidance immediately...');
+                speakText(data.guidance);
+            });
+
+            socket.on('voice_detected', (data) => {
+                console.log('🎤 Voice detected:', data.text);
+                updateStatus('Voice detected: ' + data.text);
+            });
+
+            socket.on('voice_processing_error', (data) => {
+                console.error('❌ Voice processing error:', data.error);
+                updateStatus('Voice processing error: ' + data.error);
+            });
+
+            socket.on('voice_analysis_error', (data) => {
+                console.error('❌ Analysis error:', data.error);
+                updateStatus('Analysis error: ' + data.error);
+            });
+        }
+
+        // Start Navigation Service
+        async function startService() {
+            try {
+                console.log('🚀 Starting navigation service...');
+                updateStatus('Starting navigation service...');
+
+                // Request camera and microphone permissions
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        facingMode: 'environment', // Use back camera
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        sampleRate: 44100
                     }
                 });
-                
-                this.socket.on('voice_command_detected', (data) => {
-                    this.updateStatus(`Voice command detected: "${data.text}"`);
-                    this.speakText('Scanning surroundings now...');
-                });
-                
-                this.socket.on('trigger_immediate_scan', (data) => {
-                    this.updateStatus('Processing immediate scan...');
-                });
-            }
-            
-            async checkServerConnection() {
-                try {
-                    const response = await fetch(`${this.serverUrl}/health`);
-                    const data = await response.json();
-                    this.updateStatus('Connected to server');
-                } catch (error) {
-                    this.updateStatus('Server connection failed. Make sure server is running.');
-                }
-            }
-            
-            toggleNavigationService() {
-                if (!this.isContinuousMode) {
-                    this.startNavigationService();
-                } else {
-                    this.stopNavigationService();
-                }
-            }
-            
-            async startNavigationService() {
-                try {
-                    // Request camera and microphone access
-                    const stream = await navigator.mediaDevices.getUserMedia({ 
-                        video: { 
-                            width: { ideal: 640 }, 
-                            height: { ideal: 480 },
-                            facingMode: 'environment' // Use back camera on mobile
-                        },
-                        audio: true // Enable audio for voice commands
-                    });
-                    
-                    this.video.srcObject = stream;
-                    
-                    // Start continuous processing immediately
-                    this.isContinuousMode = true;
-                    this.isListening = true;
-                    
-                    // Update UI
-                    document.getElementById('startService').textContent = 'Stop Service';
-                    document.getElementById('startService').style.background = 'rgba(255,100,100,0.3)';
-                    document.getElementById('speakButton').classList.remove('hidden');
-                    this.updateStatus('Navigation service started - always listening for "scan surroundings"');
-                    
-                    // Start continuous frame capture
-                    this.startContinuousFrameCapture();
-                    
-                    // Start continuous audio capture
-                    this.startContinuousAudioCapture();
-                    
-                    // Notify server
-                    this.socket.emit('start_continuous_mode');
-                    
-                } catch (error) {
-                    this.updateStatus('Access denied. Please allow camera and microphone access.');
-                    console.error('Service start error:', error);
-                }
-            }
-            
-            stopNavigationService() {
-                this.isContinuousMode = false;
-                this.isListening = false;
-                
+
+                // Set up video stream
+                video.srcObject = stream;
+                video.play();
+
+                // Start continuous frame capture
+                startFrameCapture();
+
+                // Start continuous audio capture
+                startAudioCapture();
+
+                // Notify server to start continuous mode
+                socket.emit('start_continuous_mode');
+
                 // Update UI
-                document.getElementById('startService').textContent = 'Start Navigation Service';
-                document.getElementById('startService').style.background = 'rgba(255,255,255,0.2)';
-                document.getElementById('speakButton').classList.add('hidden');
-                this.updateStatus('Navigation service stopped');
+                isServiceActive = true;
+                startButton.textContent = 'Stop Navigation Service';
+                startButton.onclick = stopService;
+                speakButton.disabled = false;
+                speakButton.classList.remove('hidden');
+                voiceIndicator.classList.remove('hidden');
+                updateStatus('Navigation service active - say "scan surroundings"');
+
+                console.log('✅ Navigation service started successfully');
+
+            } catch (error) {
+                console.error('❌ Error starting service:', error);
+                updateStatus('Error starting service: ' + error.message);
                 
-                // Stop continuous capture
-                this.stopContinuousFrameCapture();
-                this.stopContinuousAudioCapture();
-                
-                // Stop video stream
-                if (this.video.srcObject) {
-                    this.video.srcObject.getTracks().forEach(track => track.stop());
-                    this.video.srcObject = null;
-                }
-                
-                // Notify server
-                this.socket.emit('stop_continuous_mode');
-            }
-            
-            startContinuousFrameCapture() {
-                // Capture frames every 2 seconds for continuous processing
-                this.frameInterval = setInterval(() => {
-                    if (this.isContinuousMode && this.video.videoWidth > 0) {
-                        this.captureAndSendFrame();
-                    }
-                }, 2000); // Every 2 seconds
-            }
-            
-            stopContinuousFrameCapture() {
-                if (this.frameInterval) {
-                    clearInterval(this.frameInterval);
-                    this.frameInterval = null;
-                }
-            }
-            
-            startContinuousAudioCapture() {
-                if (!this.video.srcObject) return;
-                
-                try {
-                    const audioStream = this.video.srcObject.getAudioTracks()[0];
-                    if (!audioStream) return;
-                    
-                    // Create media recorder for audio
-                    this.mediaRecorder = new MediaRecorder(audioStream);
-                    this.audioChunks = [];
-                    
-                    this.mediaRecorder.ondataavailable = (event) => {
-                        if (event.data.size > 0) {
-                            this.audioChunks.push(event.data);
-                        }
-                    };
-                    
-                    this.mediaRecorder.onstop = () => {
-                        if (this.audioChunks.length > 0) {
-                            this.sendAudioData();
-                        }
-                    };
-                    
-                    // Record audio in 3-second chunks
-                    this.audioInterval = setInterval(() => {
-                        if (this.isListening && this.mediaRecorder.state === 'inactive') {
-                            this.audioChunks = [];
-                            this.mediaRecorder.start();
-                            
-                            setTimeout(() => {
-                                if (this.mediaRecorder.state === 'recording') {
-                                    this.mediaRecorder.stop();
-                                }
-                            }, 3000);
-                        }
-                    }, 3500); // Slightly longer than recording time
-                    
-                } catch (error) {
-                    console.error('Audio capture error:', error);
-                }
-            }
-            
-            stopContinuousAudioCapture() {
-                if (this.audioInterval) {
-                    clearInterval(this.audioInterval);
-                    this.audioInterval = null;
-                }
-                
-                if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                    this.mediaRecorder.stop();
-                }
-            }
-            
-            captureAndSendFrame() {
-                if (!this.video.videoWidth) return;
-                
-                // Capture frame
-                this.canvas.width = this.video.videoWidth;
-                this.canvas.height = this.video.videoHeight;
-                this.ctx.drawImage(this.video, 0, 0);
-                
-                // Convert to base64
-                const imageData = this.canvas.toDataURL('image/jpeg', 0.7);
-                const base64Data = imageData.split(',')[1];
-                
-                // Send via WebSocket
-                this.socket.emit('frame_data', {
-                    frame: base64Data,
-                    timestamp: Date.now()
-                });
-            }
-            
-            sendAudioData() {
-                if (this.audioChunks.length === 0) return;
-                
-                const audioBlob = new Blob(this.audioChunks, { type: 'audio/wav' });
-                const reader = new FileReader();
-                
-                reader.onload = () => {
-                    const base64Audio = reader.result.split(',')[1];
-                    this.socket.emit('audio_data', {
-                        audio: base64Audio,
-                        timestamp: Date.now()
-                    });
-                };
-                
-                reader.readAsDataURL(audioBlob);
-            }
-            
-            
-            speakGuidance() {
-                if (this.currentGuidance) {
-                    this.speakText(this.currentGuidance);
-                }
-            }
-            
-            speakText(text) {
-                if ('speechSynthesis' in window) {
-                    const utterance = new SpeechSynthesisUtterance(text);
-                    utterance.rate = 0.9;
-                    utterance.pitch = 1;
-                    utterance.volume = 1;
-                    
-                    utterance.onstart = () => {
-                        this.updateStatus('Speaking...', true);
-                    };
-                    
-                    utterance.onend = () => {
-                        this.updateStatus('Ready for next command');
-                    };
-                    
-                    speechSynthesis.speak(utterance);
-                } else {
-                    this.updateStatus('Text-to-speech not supported');
-                }
-            }
-            
-            updateStatus(message, isProcessing = false) {
-                this.status.textContent = message;
-                if (isProcessing) {
-                    this.status.classList.add('processing');
-                } else {
-                    this.status.classList.remove('processing');
+                if (error.name === 'NotAllowedError') {
+                    updateStatus('Camera/microphone access denied. Please allow permissions and try again.');
                 }
             }
         }
+
+        // Stop Navigation Service
+        function stopService() {
+            console.log('🛑 Stopping navigation service...');
+            
+            // Stop frame capture
+            if (frameInterval) {
+                clearInterval(frameInterval);
+                frameInterval = null;
+            }
+
+            // Stop audio capture
+            if (audioInterval) {
+                clearInterval(audioInterval);
+                audioInterval = null;
+            }
+
+            // Stop media recorder
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+
+            // Stop video stream
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+
+            // Notify server to stop continuous mode
+            if (socket) {
+                socket.emit('stop_continuous_mode');
+            }
+
+            // Update UI
+            isServiceActive = false;
+            startButton.textContent = 'Start Navigation Service';
+            startButton.onclick = startService;
+            speakButton.disabled = true;
+            speakButton.classList.add('hidden');
+            voiceIndicator.classList.add('hidden');
+            updateStatus('Navigation service stopped');
+
+            console.log('✅ Navigation service stopped');
+        }
+
+        // Start continuous frame capture
+        function startFrameCapture() {
+            console.log('📸 Starting frame capture...');
+            
+            frameInterval = setInterval(() => {
+                if (isServiceActive && video.videoWidth > 0) {
+                    captureFrame();
+                }
+            }, 3000); // Capture every 3 seconds for better battery life
+        }
+
+        // Capture frame from video
+        function captureFrame() {
+            try {
+                const context = canvas.getContext('2d');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                
+                // Draw current video frame to canvas
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                // Convert to base64 JPEG with lower quality for mobile performance
+                const frameData = canvas.toDataURL('image/jpeg', 0.5);
+                
+                // Send frame to server
+                socket.emit('frame_data', { frame: frameData });
+                
+                console.log('📸 Frame captured and sent');
+            } catch (error) {
+                console.error('❌ Error capturing frame:', error);
+            }
+        }
+
+        // Start continuous audio capture
+        function startAudioCapture() {
+            console.log('🎤 Starting audio capture...');
+            
+            try {
+                // Create MediaRecorder for audio with fallback formats
+                const audioStream = new MediaStream(stream.getAudioTracks());
+                
+                // Try different audio formats for better compatibility
+                let mimeType = 'audio/webm;codecs=opus';
+                if (!MediaRecorder.isTypeSupported(mimeType)) {
+                    mimeType = 'audio/webm';
+                    if (!MediaRecorder.isTypeSupported(mimeType)) {
+                        mimeType = 'audio/mp4';
+                        if (!MediaRecorder.isTypeSupported(mimeType)) {
+                            mimeType = 'audio/wav';
+                        }
+                    }
+                }
+                
+                console.log('🎤 Using audio format:', mimeType);
+                mediaRecorder = new MediaRecorder(audioStream, { mimeType });
+
+                let audioChunks = [];
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = () => {
+                    const audioBlob = new Blob(audioChunks, { type: mimeType });
+                    audioChunks = [];
+                    
+                    // Validate audio size
+                    if (audioBlob.size > 1000 && audioBlob.size < 1000000) {
+                        // Convert to base64
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                            const base64Audio = reader.result.split(',')[1];
+                            socket.emit('audio_data', { 
+                                audio: base64Audio,
+                                format: mimeType 
+                            });
+                            console.log('🎤 Audio chunk sent with format:', mimeType);
+                        };
+                        reader.readAsDataURL(audioBlob);
+                    } else {
+                        console.log('⚠️ Audio chunk too small or too large:', audioBlob.size);
+                    }
+                };
+
+                // Start recording in 3-second chunks for better battery life
+                audioInterval = setInterval(() => {
+                    if (isServiceActive && mediaRecorder.state === 'inactive') {
+                        mediaRecorder.start();
+                        setTimeout(() => {
+                            if (mediaRecorder.state === 'recording') {
+                                mediaRecorder.stop();
+                            }
+                        }, 3000);
+                    }
+                }, 3000);
+
+            } catch (error) {
+                console.error('❌ Error setting up audio capture:', error);
+                updateStatus('Audio capture error: ' + error.message);
+            }
+        }
+
+        // Display navigation guidance
+        function displayGuidance(guidance) {
+            guidanceText.textContent = guidance;
+            guidanceDiv.classList.remove('hidden');
+            console.log('📋 Guidance displayed:', guidance);
+        }
+
+        // Speak text using Web Speech API
+        function speakText(text) {
+            console.log('🔊 Attempting to speak:', text);
+            
+            if (!text || text.trim() === '') {
+                console.warn('⚠️ Empty text provided to speakText');
+                return;
+            }
+            
+            if ('speechSynthesis' in window) {
+                // Cancel any ongoing speech
+                speechSynthesis.cancel();
+                
+                // Wait a moment for cancellation to complete
+                setTimeout(() => {
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.rate = 1.1;  // 20% faster than default (0.9 + 0.2)
+                    utterance.pitch = 1.0;
+                    utterance.volume = 1.0;
+                    
+                    utterance.onstart = () => {
+                        console.log('🔊 Speech started:', text.substring(0, 50) + '...');
+                        updateStatus('Speaking guidance...');
+                    };
+                    
+                    utterance.onend = () => {
+                        console.log('🔊 Speech completed');
+                        updateStatus('Navigation service active - say "scan surroundings"');
+                    };
+                    
+                    utterance.onerror = (event) => {
+                        console.error('❌ Speech error:', event.error);
+                        updateStatus('Speech error: ' + event.error);
+                    };
+                    
+                    console.log('🔊 Starting speech synthesis...');
+                    speechSynthesis.speak(utterance);
+                }, 100);
+                
+            } else {
+                console.warn('⚠️ Speech synthesis not supported');
+                updateStatus('Speech synthesis not supported on this device');
+            }
+        }
+
+        // Update status message
+        function updateStatus(message) {
+            statusText.textContent = message;
+            console.log('📱 Status:', message);
+        }
+
+        // Test TTS function
+        function testTTS() {
+            const testText = "This is a test of the text-to-speech functionality. If you can hear this, TTS is working correctly.";
+            console.log('🧪 Testing TTS with:', testText);
+            speakText(testText);
+        }
+
+        // Debug function to check WebSocket connection
+        function debugWebSocket() {
+            console.log('🔍 WebSocket debug info:');
+            console.log('  - Socket connected:', socket ? socket.connected : 'No socket');
+            console.log('  - Service active:', isServiceActive);
+            console.log('  - Current guidance:', currentGuidance);
+            console.log('  - Speech synthesis available:', 'speechSynthesis' in window);
+        }
+
+        // Event Listeners
+        startButton.onclick = startService;
         
-        // Initialize app when page loads
+        speakButton.onclick = () => {
+            if (currentGuidance) {
+                speakText(currentGuidance);
+            } else {
+                updateStatus('No guidance available to speak');
+            }
+        };
+
+        // Initialize the application
         document.addEventListener('DOMContentLoaded', () => {
-            new YeongSilApp();
+            console.log('📱 DOM loaded, initializing app...');
+            initializeSocket();
+            updateStatus('Ready to start navigation service');
         });
+
+        // Handle page visibility changes
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && isServiceActive) {
+                console.log('📱 Page hidden, pausing service');
+                // Keep service running but reduce processing
+            } else if (!document.hidden && isServiceActive) {
+                console.log('📱 Page visible, resuming service');
+            }
+        });
+
+        // Handle errors
+        window.addEventListener('error', (event) => {
+            console.error('❌ Global error:', event.error);
+            updateStatus('Application error: ' + event.error.message);
+        });
+
+        console.log('✅ YeongSil Mobile App - Initialization complete');
     </script>
 </body>
 </html>
