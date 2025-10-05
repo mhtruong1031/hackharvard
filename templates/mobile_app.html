@@ -372,6 +372,8 @@
         let frameInterval = null;
         let audioInterval = null;
         let currentGuidance = null;
+        let isCurrentlySpeaking = false;
+        let speechQueue = [];
 
         // Initialize WebSocket connection
         function initializeSocket() {
@@ -653,38 +655,68 @@
                 return;
             }
             
+            // Add to speech queue instead of cancelling current speech
+            speechQueue.push(text);
+            processSpeechQueue();
+        }
+
+        // Process speech queue to prevent interruption
+        function processSpeechQueue() {
+            if (isCurrentlySpeaking || speechQueue.length === 0) {
+                return;
+            }
+            
+            const text = speechQueue.shift();
+            isCurrentlySpeaking = true;
+            
             if ('speechSynthesis' in window) {
-                // Cancel any ongoing speech
-                speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.rate = 1.1;
+                utterance.pitch = 1.0;
+                utterance.volume = 1.0;
                 
-                // Wait a moment for cancellation to complete
-                setTimeout(() => {
-                    const utterance = new SpeechSynthesisUtterance(text);
-                    utterance.rate = 1.1;  // 20% faster than default (0.9 + 0.2)
-                    utterance.pitch = 1.0;
-                    utterance.volume = 1.0;
+                utterance.onstart = () => {
+                    console.log('🔊 Speech started:', text.substring(0, 50) + '...');
+                    updateStatus('Speaking guidance...');
+                };
+                
+                utterance.onend = () => {
+                    console.log('🔊 Speech completed');
+                    isCurrentlySpeaking = false;
                     
-                    utterance.onstart = () => {
-                        console.log('🔊 Speech started:', text.substring(0, 50) + '...');
-                        updateStatus('Speaking guidance...');
-                    };
-                    
-                    utterance.onend = () => {
-                        console.log('🔊 Speech completed');
+                    // Process next item in queue if available
+                    if (speechQueue.length > 0) {
+                        setTimeout(() => processSpeechQueue(), 100);
+                    } else {
                         updateStatus('Navigation service active - say "scan surroundings" or "read text"');
-                    };
+                    }
+                };
+                
+                utterance.onerror = (event) => {
+                    console.error('❌ Speech error:', event.error);
+                    isCurrentlySpeaking = false;
                     
-                    utterance.onerror = (event) => {
-                        console.error('❌ Speech error:', event.error);
+                    // Don't show "canceled" as an error to user - it's normal behavior
+                    if (event.error !== 'canceled') {
                         updateStatus('Speech error: ' + event.error);
-                    };
+                    } else {
+                        console.log('🔊 Speech was canceled (normal behavior)');
+                    }
                     
-                    console.log('🔊 Starting speech synthesis...');
-                    speechSynthesis.speak(utterance);
-                }, 100);
+                    // Process next item in queue if available
+                    if (speechQueue.length > 0) {
+                        setTimeout(() => processSpeechQueue(), 100);
+                    } else {
+                        updateStatus('Navigation service active - say "scan surroundings" or "read text"');
+                    }
+                };
+                
+                console.log('🔊 Starting speech synthesis...');
+                speechSynthesis.speak(utterance);
                 
             } else {
                 console.warn('⚠️ Speech synthesis not supported');
+                isCurrentlySpeaking = false;
                 updateStatus('Speech synthesis not supported on this device');
             }
         }
@@ -699,7 +731,41 @@
         function testTTS() {
             const testText = "This is a test of the text-to-speech functionality. If you can hear this, TTS is working correctly.";
             console.log('🧪 Testing TTS with:', testText);
-            speakText(testText);
+            
+            // Initialize speech synthesis if not already done
+            initializeSpeechSynthesis();
+            
+            // Try direct TTS first (bypass queue for testing)
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance(testText);
+                utterance.rate = 1.1;
+                utterance.pitch = 1.0;
+                utterance.volume = 1.0;
+                
+                utterance.onstart = () => {
+                    console.log('🔊 Direct TTS test started');
+                    updateStatus('Testing TTS...');
+                };
+                
+                utterance.onend = () => {
+                    console.log('🔊 Direct TTS test completed');
+                    updateStatus('TTS test completed');
+                };
+                
+                utterance.onerror = (event) => {
+                    console.error('❌ Direct TTS error:', event.error);
+                    if (event.error !== 'canceled') {
+                        updateStatus('TTS error: ' + event.error);
+                    } else {
+                        updateStatus('TTS was canceled');
+                    }
+                };
+                
+                console.log('🔊 Starting direct TTS test...');
+                speechSynthesis.speak(utterance);
+            } else {
+                updateStatus('Speech synthesis not supported');
+            }
         }
 
         // Initialize speech synthesis (required for some browsers)
