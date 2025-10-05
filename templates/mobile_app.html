@@ -9,8 +9,8 @@
             font-family: Arial, sans-serif;
             margin: 0;
             padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            background: white;
+            color: black;
             min-height: 100vh;
         }
         
@@ -20,18 +20,12 @@
             text-align: center;
         }
         
-        h1 {
-            margin-bottom: 30px;
-            font-size: 2em;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-        }
-        
         .camera-container {
-            background: rgba(255,255,255,0.1);
+            background: white;
             border-radius: 15px;
             padding: 20px;
             margin: 20px 0;
-            backdrop-filter: blur(10px);
+            border: 2px solid #ddd;
         }
         
         #video {
@@ -47,25 +41,27 @@
             margin: 20px 0;
         }
         
-        button {
-            background: rgba(255,255,255,0.2);
-            border: 2px solid rgba(255,255,255,0.3);
+        #startService {
+            background: black;
+            border: none;
             color: white;
-            padding: 15px 30px;
-            margin: 10px;
-            border-radius: 25px;
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
             font-size: 16px;
+            font-weight: bold;
             cursor: pointer;
             transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
+            margin: 20px auto;
+            display: block;
         }
         
-        button:hover {
-            background: rgba(255,255,255,0.3);
-            transform: translateY(-2px);
+        #startService:hover {
+            background: #333;
+            transform: scale(1.05);
         }
         
-        button:disabled {
+        #startService:disabled {
             opacity: 0.5;
             cursor: not-allowed;
             transform: none;
@@ -74,12 +70,13 @@
         .status {
             margin: 20px 0;
             padding: 15px;
-            background: rgba(255,255,255,0.1);
+            background: #f5f5f5;
             border-radius: 10px;
             min-height: 50px;
             display: flex;
             align-items: center;
             justify-content: center;
+            border: 1px solid #ddd;
         }
         
         .processing {
@@ -93,12 +90,13 @@
         }
         
         .guidance {
-            background: rgba(0,0,0,0.3);
+            background: #f0f0f0;
             padding: 20px;
             border-radius: 10px;
             margin: 20px 0;
             text-align: left;
             line-height: 1.6;
+            border: 1px solid #ddd;
         }
         
         .voice-indicator {
@@ -121,9 +119,6 @@
 </head>
 <body>
     <div class="container">
-        <h1>YeongSil</h1>
-        <p>Navigation Assistant for the Visually Impaired</p>
-        
         <div class="camera-container">
             <video id="video" autoplay muted></video>
             <canvas id="canvas" class="hidden"></canvas>
@@ -131,9 +126,6 @@
         
         <div class="controls">
             <button id="startService">Start Navigation Service</button>
-            <button id="speakButton" disabled class="hidden">Speak Guidance</button>
-            <button id="testTTS" onclick="testTTS()">Test TTS</button>
-            <button onclick="debugWebSocket()">Debug Info</button>
         </div>
         
         <div id="status" class="status">
@@ -357,7 +349,6 @@
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const startButton = document.getElementById('startService');
-        const speakButton = document.getElementById('speakButton');
         const statusDiv = document.getElementById('status');
         const statusText = document.getElementById('statusText');
         const voiceIndicator = document.getElementById('voiceIndicator');
@@ -468,10 +459,8 @@
 
                 // Update UI
                 isServiceActive = true;
-                startButton.textContent = 'Stop Navigation Service';
+                startButton.textContent = 'Stop Service';
                 startButton.onclick = stopService;
-                speakButton.disabled = false;
-                speakButton.classList.remove('hidden');
                 voiceIndicator.classList.remove('hidden');
                 updateStatus('Navigation service active - say "scan surroundings" or "read text"');
 
@@ -521,10 +510,8 @@
 
             // Update UI
             isServiceActive = false;
-            startButton.textContent = 'Start Navigation Service';
+            startButton.textContent = 'Start Service';
             startButton.onclick = startService;
-            speakButton.disabled = true;
-            speakButton.classList.add('hidden');
             voiceIndicator.classList.add('hidden');
             updateStatus('Navigation service stopped');
 
@@ -846,14 +833,6 @@
 
         // Event Listeners
         startButton.onclick = startService;
-        
-        speakButton.onclick = () => {
-            if (currentGuidance) {
-                speakText(currentGuidance);
-            } else {
-                updateStatus('No guidance available to speak');
-            }
-        };
 
         // Initialize the application
         document.addEventListener('DOMContentLoaded', () => {
